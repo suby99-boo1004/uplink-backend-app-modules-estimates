@@ -208,11 +208,49 @@ def _recalc_sections(sections: List[EstimateSectionIn]) -> Tuple[Dict[str, float
 # -----------------------------
 # 조회 API
 # -----------------------------
+def _get_projects_state_column(db: Session) -> Optional[str]:
+    """projects 테이블에서 '상태'로 쓰이는 컬럼명을 찾아 반환합니다.
+    - 환경별 스키마 차이를 흡수하기 위한 안전장치
+    """
+    candidates = ["business_state", "status", "project_status", "state", "project_state"]
+    cols = db.execute(
+        text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'projects'
+            """
+        )
+    ).fetchall()
+    colset = {str(r[0]) for r in cols if r and r[0]}
+    for c in candidates:
+        if c in colset:
+            return c
+    return None
+
+
+def _project_state_expr(db: Session) -> str:
+    """SQL에서 사용할 프로젝트 상태 표현식 반환"""
+    col = _get_projects_state_column(db)
+    if col:
+        return f"p.{col}"
+    # projects에 상태 컬럼이 없으면 견적서 상태만 사용
+    return "NULL"
+
 def list_years(db: Session, *, business_state: Optional[str]) -> List[int]:
+    proj_state = _project_state_expr(db)
+    raw_expr = f"COALESCE(({proj_state})::text, e.business_state::text)"
+    state_expr = f"""(CASE
+      WHEN UPPER({raw_expr}) IN ('ONGOING','IN_PROGRESS','INPROGRESS','PROGRESS') THEN 'ONGOING'
+      WHEN UPPER({raw_expr}) IN ('DONE','COMPLETED','COMPLETE','FINISHED') THEN 'DONE'
+      WHEN UPPER({raw_expr}) IN ('CANCELED','CANCELLED','CANCEL','ABORTED') THEN 'CANCELED'
+      ELSE 'ONGOING'
+    END)"""
+
     where = ""
     params: Dict[str, Any] = {}
     if business_state:
-        where = "WHERE e.business_state = :bs"
+        where = f"WHERE {state_expr} = :bs"
         params["bs"] = business_state
 
     rows = db.execute(
@@ -233,8 +271,6 @@ def list_years(db: Session, *, business_state: Optional[str]) -> List[int]:
         cy = dt.datetime.now().year
         return [cy - i for i in range(0, 5)]
     return years
-
-
 def list_estimates(
     db: Session,
     *,
@@ -243,11 +279,20 @@ def list_estimates(
     business_state: Optional[str],
     q: Optional[str],
 ) -> List[EstimateListItemOut]:
+    proj_state = _project_state_expr(db)
+    raw_expr = f"COALESCE(({proj_state})::text, e.business_state::text)"
+    state_expr = f"""(CASE
+      WHEN UPPER({raw_expr}) IN ('ONGOING','IN_PROGRESS','INPROGRESS','PROGRESS') THEN 'ONGOING'
+      WHEN UPPER({raw_expr}) IN ('DONE','COMPLETED','COMPLETE','FINISHED') THEN 'DONE'
+      WHEN UPPER({raw_expr}) IN ('CANCELED','CANCELLED','CANCEL','ABORTED') THEN 'CANCELED'
+      ELSE 'ONGOING'
+    END)"""
+
     wh: List[str] = ["e.deleted_at IS NULL"]
     params: Dict[str, Any] = {}
 
     if business_state:
-        wh.append("e.business_state = :bs")
+        wh.append(f"{state_expr} = :bs")
         params["bs"] = business_state
 
     if department_id:
@@ -276,7 +321,7 @@ def list_estimates(
               EXTRACT(YEAR FROM COALESCE(p.start_date, p.created_at, e.created_at))::int AS year,
               e.receiver_name,
               e.title,
-              e.business_state,
+              {state_expr} AS business_state,
               e.created_at,
               u.name AS author_name,
               r.subtotal,
@@ -314,11 +359,6 @@ def list_estimates(
             )
         )
     return out
-
-
-# -----------------------------
-# 생성/수정(버전)
-# -----------------------------
 def _insert_sections_and_lines(
     db: Session,
     *,
