@@ -356,15 +356,22 @@ def _insert_sections_and_lines(
         ).scalar()
         section_id_map[(sec.section_type, sec.section_order)] = int(sid)
 
-    # 1.5) product_id FK 안전장치: 프론트/검색 결과의 product_id가 DB(products)에 실제 존재하는지 확인
+    # 1.5) product_id FK 안전장치: 프론트/검색 결과의 product_id(source_id)가 DB(products)에 실제 존재하는지 확인
     # - 존재하지 않는 product_id가 들어오면 FK 위반으로 500 발생
     # - 스냅샷(제품명/규격/단가/수량)이 핵심이므로, 제품이 없으면 product_id는 NULL로 저장(수동항목처럼 처리)
     valid_product_ids: set[int] = set()
-    product_ids = sorted({int(ln.get('source_id')) for ln in serialized_lines if ln.get('source_type') == 'PRODUCT' and ln.get('source_id') is not None})
+    product_ids = sorted(
+        {
+            int(ln.get("source_id"))
+            for ln in serialized_lines
+            if ln.get("source_type") == "PRODUCT" and ln.get("source_id") is not None
+        }
+    )
+
     if product_ids:
         rows = db.execute(
-            text('SELECT id FROM products WHERE id = ANY(:ids)'),
-            {'ids': product_ids},
+            text("SELECT id FROM products WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
+            {"ids": product_ids},
         ).fetchall()
         valid_product_ids = {int(r[0]) for r in rows}
 
