@@ -282,11 +282,12 @@ def list_estimates(
     proj_state = _project_state_expr(db)
     raw_expr = f"COALESCE(({proj_state})::text, e.business_state::text)"
     state_expr = f"""(CASE
-      WHEN UPPER({raw_expr}) IN ('ONGOING','IN_PROGRESS','INPROGRESS','PROGRESS') THEN 'ONGOING'
-      WHEN UPPER({raw_expr}) IN ('DONE','COMPLETED','COMPLETE','FINISHED') THEN 'DONE'
-      WHEN UPPER({raw_expr}) IN ('CANCELED','CANCELLED','CANCEL','ABORTED') THEN 'CANCELED'
-      ELSE 'ONGOING'
-    END)"""
+  WHEN UPPER({raw_expr}) LIKE '%CANCEL%' OR UPPER({raw_expr}) LIKE '%ABORT%' OR UPPER({raw_expr}) LIKE '%STOP%' OR UPPER({raw_expr}) LIKE '%CLOSE%' THEN 'CANCELED'
+  WHEN UPPER({raw_expr}) LIKE '%DONE%' OR UPPER({raw_expr}) LIKE '%COMPLETE%' OR UPPER({raw_expr}) LIKE '%COMPLET%' OR UPPER({raw_expr}) LIKE '%FINISH%' THEN 'DONE'
+  WHEN UPPER({raw_expr}) LIKE '%ONGO%' OR UPPER({raw_expr}) LIKE '%PROGRESS%' OR UPPER({raw_expr}) LIKE '%RUN%' THEN 'ONGOING'
+  ELSE 'ONGOING'
+END)
+"""
 
     wh: List[str] = ["e.deleted_at IS NULL"]
     params: Dict[str, Any] = {}
@@ -329,8 +330,8 @@ def list_estimates(
               r.total
             FROM estimates e
             LEFT JOIN projects p ON p.id = e.project_id
-            LEFT JOIN users u ON u.id = e.created_by
             LEFT JOIN estimate_revisions r ON r.id = e.current_revision_id
+            LEFT JOIN users u ON u.id = COALESCE(r.created_by, e.created_by)
             WHERE {where_sql}
             ORDER BY e.id DESC
             """

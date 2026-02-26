@@ -58,8 +58,6 @@ def api_list(
     return list_estimates(db, year=year, department_id=department_id, business_state=status, q=q)
 
 
-
-
 @router.get("/{estimate_id}/history-details", response_model=List[EstimateDetailOut])
 def api_history_details(
     estimate_id: int,
@@ -69,6 +67,7 @@ def api_history_details(
 ):
     # 모든 로그인 사용자에게 동일하게 제공(권한 제한 없음)
     return get_history_details(db, estimate_id, limit=limit)
+
 
 @router.post("", response_model=dict)
 def api_create(
@@ -130,3 +129,38 @@ def api_business_state(
     current_user: User = Depends(get_current_user),
 ):
     return update_business_state(db, estimate_id, payload.business_state)
+
+
+# =========================
+# 삭제(soft delete)
+# =========================
+@router.delete("/{estimate_id}", response_model=dict)
+def api_delete(
+    estimate_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # 프론트는 관리자(role_id==6)만 삭제 버튼 노출
+    role_id = getattr(current_user, "role_id", None)
+    if int(role_id or 0) != 6:
+        raise HTTPException(status_code=403, detail="삭제 권한이 없습니다.")
+
+    # 복구 불가 정책: DB에서는 소프트 삭제로 숨김 처리
+    # (관련 revision/sections/items는 이력 보존 목적상 유지)
+    res = db.execute(
+        text(
+            """
+            UPDATE estimates
+               SET deleted_at = now()
+             WHERE id = :id
+               AND deleted_at IS NULL
+            """
+        ),
+        {"id": int(estimate_id)},
+    )
+    db.commit()
+
+    if res.rowcount == 0:
+        raise HTTPException(status_code=404, detail="견적서를 찾을 수 없습니다.")
+
+    return {"ok": True, "id": int(estimate_id)}
